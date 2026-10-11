@@ -1,32 +1,62 @@
+"""
+Streamlit Web Application for PELS Prompt Quality Scorer.
+"""
 
 from pathlib import Path
+import sys
 
-import joblib
+# Ensure src directory is on module search path for local and Streamlit Cloud execution
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
 import streamlit as st
+from prompt_scorer.evaluate import format_score
+from prompt_scorer.train import load_model
 
-MODEL_PATH = Path(__file__).parent / "models" / "pels_random_forest.joblib"
+BASE_DIR = Path(__file__).resolve().parent
+RF_MODEL_PATH = BASE_DIR / "models" / "pels_random_forest.joblib"
+RIDGE_MODEL_PATH = BASE_DIR / "models" / "pels_ridge.joblib"
+
+
+def get_available_model_path() -> Path:
+    if RF_MODEL_PATH.exists():
+        return RF_MODEL_PATH
+    if RIDGE_MODEL_PATH.exists():
+        return RIDGE_MODEL_PATH
+    return RF_MODEL_PATH
+
 
 st.set_page_config(
     page_title="PELS Prompt Quality Scorer",
-    page_icon="🎯",
+    page_icon="",
     layout="centered",
 )
 
 st.title("PELS Prompt Quality Scorer")
 st.write(
-    "Enter a prompt to estimate its quality score using "
-    "our trained machine-learning model."
+    "Enter a prompt to estimate its quality score out of 10 using "
+    "our trained machine-learning model (Prompt Engineering Literacy Scale rubrics)."
 )
 
-@st.cache_resource
-def load_model():
-    return joblib.load(MODEL_PATH)
 
-if not MODEL_PATH.exists():
-    st.error("Model not found. Run compare_models.py first.")
+@st.cache_resource
+def cached_load_model(path: Path):
+    return load_model(path)
+
+
+model_path = get_available_model_path()
+
+if not model_path.exists():
+    st.error(
+        "Model not found. Please train a model first by running:\n"
+        "`python compare_models.py` or `python train.py`"
+    )
     st.stop()
 
-model = load_model()
+try:
+    model = cached_load_model(model_path)
+except Exception as e:
+    st.error(f"Failed to load model from {model_path}: {e}")
+    st.stop()
 
 prompt = st.text_area(
     "Your prompt",
@@ -35,15 +65,20 @@ prompt = st.text_area(
 )
 
 if st.button("Score my prompt", type="primary"):
-    if not prompt.strip():
+    cleaned_prompt = prompt.strip() if prompt else ""
+    if not cleaned_prompt:
         st.warning("Please enter a prompt first.")
     else:
-        score = float(model.predict([prompt.strip()])[0])
-        st.metric("Predicted quality score", f"{score:.2f}")
-        st.caption(
-            "This is an experimental prediction, not an objective "
-            "measure of prompt quality. Results may be inaccurate."
-        )
+        try:
+            raw_score = float(model.predict([cleaned_prompt])[0])
+            formatted = format_score(raw_score, scale=10.0)
+            st.metric(label="Predicted Prompt Quality Score", value=formatted)
+            st.caption(
+                "This is an experimental prediction, not an objective "
+                "measure of prompt quality. Results may be inaccurate."
+            )
+        except Exception as e:
+            st.error(f"Error predicting score: {e}")
 
 st.divider()
 st.caption("Built with Python, scikit-learn, and Streamlit.")

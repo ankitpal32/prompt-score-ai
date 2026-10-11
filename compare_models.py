@@ -1,59 +1,44 @@
+"""
+Model comparison and Random Forest training script for PELS Prompt Scorer.
+
+Trains a TF-IDF + Random Forest Regressor pipeline using the exact same split,
+evaluates on held-out test data, and saves models/pels_random_forest.joblib.
+"""
 
 from pathlib import Path
-import pandas as pd
-import joblib
+import sys
 
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics import mean_absolute_error, r2_score
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
+# Ensure src directory is on module search path
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-# Reuse the exact cleaned dataset and split used in train.py.
-DATA_PATH = Path("data/PELS_Final_Justification.xlsx")
+from prompt_scorer.data import DEFAULT_DATA_PATH, load_and_clean_data, split_data
+from prompt_scorer.train import build_rf_pipeline, save_model, train_model
+from prompt_scorer.evaluate import evaluate_predictions
 
-df = pd.read_excel(DATA_PATH)
+MODEL_PATH = Path("models/pels_random_forest.joblib")
 
-prompt_col = "Prompt Text"
-target_col = "Final\nScore"
 
-# Adjust these two names if your spreadsheet differs.
-data = df[[prompt_col, target_col]].copy()
-data.columns = ["prompt", "score"]
-data["prompt"] = data["prompt"].astype("string").str.strip()
-data["score"] = pd.to_numeric(data["score"], errors="coerce")
-data = data.dropna(subset=["prompt", "score"])
-data = data[data["prompt"].str.len() > 0]
-data = data.drop_duplicates(subset=["prompt"], keep="first")
+def main():
+    print("\n--- 1. Loading & Splitting Data ---")
+    data, _, _ = load_and_clean_data(DEFAULT_DATA_PATH)
+    X_train, X_test, y_train, y_test = split_data(data, test_size=0.20, random_state=42)
 
-X_train, X_test, y_train, y_test = train_test_split(
-    data["prompt"],
-    data["score"],
-    test_size=0.20,
-    random_state=42,
-)
+    print("\n--- 2. Training TF-IDF + Random Forest Pipeline ---")
+    model = build_rf_pipeline(n_estimators=100, random_state=42, n_jobs=-1)
+    train_model(model, X_train, y_train)
 
-model = Pipeline([
-    ("tfidf", TfidfVectorizer(
-        lowercase=True,
-        ngram_range=(1, 2),
-        max_features=20000,
-        sublinear_tf=True,
-    )),
-    ("regressor", RandomForestRegressor(
-        n_estimators=100,
-        random_state=42,
-        n_jobs=-1,
-    )),
-])
+    print("\n--- 3. Evaluating on Test Split ---")
+    predictions = model.predict(X_test)
+    results = evaluate_predictions(y_test, predictions)
 
-model.fit(X_train, y_train)
-predictions = model.predict(X_test)
+    print("Random Forest Results:")
+    print(f"Test samples: {results['test_rows']}")
+    print(f"MAE:          {results['mae']:.4f}")
+    print(f"R²:           {results['r2']:.4f}")
 
-print("Random Forest results")
-print(f"Test samples: {len(y_test)}")
-print(f"MAE: {mean_absolute_error(y_test, predictions):.4f}")
-print(f"R2:  {r2_score(y_test, predictions):.4f}")
+    save_model(model, MODEL_PATH)
+    print(f"\nRandom Forest model saved successfully to: {MODEL_PATH}")
 
-joblib.dump(model, "models/pels_random_forest.joblib")
-print("Random Forest model saved successfully!")
+
+if __name__ == "__main__":
+    main()
